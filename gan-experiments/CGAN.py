@@ -5,22 +5,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from utils import *
-from jinja2.compiler import generate
+from PIL import Image
 
 class CGAN(object):
-    def __init__(self, encoding_size, neurons_discriminator, neurons_generator,
+    def __init__(self, neurons_discriminator, neurons_generator,
                  batch_size, results_dir, checkpoint_dir, logs_dir, dataset_name, epochs):
         
         # Discriminator and Generator Architectures Respectively
         self.dis = neurons_discriminator
         self.gen = neurons_generator
         
-        # Encoding Size (encoding_size x 1) vector
-        self.encoding = encoding_size
-        
         self.batch_size = batch_size
         
-        self.learning_rate = 0.0002
+        self.learning_rate = 0.0001
         self.beta1 = 0.5
         
         self.epochs = epochs
@@ -63,8 +60,10 @@ class CGAN(object):
             net = tf.reshape(net, [self.batch_size, 7, 7, 128])
         
             net = deconv2d(net, output_shape = [self.batch_size, 14, 14, 64], scope="g_deconv_1", is_training=is_training)
+            net = bn(net, scope="g_bn_{}".format(len(self.dis) + 2), is_training=is_training)
+            net = lrelu(net)
             net = deconv2d(net, output_shape = [self.batch_size, 28, 28, 1], scope="g_deconv_2", is_training=is_training)
-        
+            
             return sigmoid(net)
     
     def discriminator(self, images, labels, is_training=True, reuse=False):
@@ -180,19 +179,50 @@ class CGAN(object):
                     print(d_loss)
                     print("Generator:")
                     print(g_loss)
-        
-        batch_images = self.data_X[0:bs]
-        batch_labels = self.data_y[0:bs]
             
-        batch_noise = np.random.uniform(-1, 1, [self.batch_size, self.z_dim]).astype(np.float32)
+            batch_labels = np.zeros((self.batch_size, 10))
+            
+            # Only the first 10 * (self.batch_size//10) will make sense, the rest won't.
+            for i in range(10):
+                for j in range(self.batch_size//10):
+                    batch_labels[i*(self.batch_size//10) + j][i] = 1
+            
+            batch_noise = np.random.uniform(-1, 1, [self.batch_size, self.z_dim]).astype(np.float32)
         
-        generated_images = self.sess.run(self.fake_images, feed_dict={self.inputs: batch_images, self.y: batch_labels,
-                           self.z: batch_noise})
-        generated_images = np.array(generated_images)
-        generated_images = generated_images.reshape([64, 28, 28])
+            generated_images = self.sess.run(self.fake_images, feed_dict={self.y: batch_labels,
+                               self.z: batch_noise})
+            generated_images = np.array(generated_images)
+            generated_images = generated_images.reshape([64, 28, 28])
         
-        for i in range(len(generated_images)):
-            plt.imshow(generated_images[i], cmap="Greys")
-            fname = "Test_{}.png".format(i)
-            plt.savefig(os.path.join(self.results_dir, fname))
-            plt.clf()
+            os.mkdir("{}/epoch_{}".format(self.results_dir, epoch))
+            fnames = []
+        
+            for i in range(len(generated_images)):
+                fname = "{}/epoch_{}/Test_{}_labels_{}.png".format(self.results_dir, epoch, i, np.argmax(batch_labels[i]))
+                fnames.append(fname)
+                gen = generated_images[i] * 255
+                gen = np.floor(gen)
+                gen = gen.flatten()
+                im = Image.new("L", (28, 28))
+                im.putdata(gen)
+                im.save(fname)
+                
+            images = [Image.open(name) for name in fnames]
+            new_im = Image.new("L", ((self.batch_size//10) * 28, 10 * 28))
+            
+            x_offset = 0
+            y_offset = 0
+            for i in range(10):
+                for j in range(self.batch_size//10):
+                    im = images[(self.batch_size//10) * i + j]
+                    
+                    
+                    new_im.paste(im, (x_offset,y_offset))
+                    x_offset += im.size[0]
+                    
+                    if(x_offset >= (self.batch_size//10) * 28):
+                        x_offset = 0
+                        y_offset += im.size[0]
+            
+            new_im.save('{}/epoch_{}/result.jpg'.format(self.results_dir, epoch))
+                
